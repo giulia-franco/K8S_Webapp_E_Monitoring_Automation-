@@ -1,0 +1,34 @@
+---
+# Package list update
+   - name: Package list update
+     package:
+        update_cache: yes 
+
+# Check that pip is installed
+   - name: Check that pip is installed
+     package:  
+        name: python3-pip     
+        state: present        
+
+# Install curl
+   - name: Install required packages
+     dnf:
+      name: curl
+      state: present
+
+# Install Python 'requests'
+   - name: Install Python 'requests'
+     pip:
+        name: requests      
+
+# Install Kubectl  
+   - name: Get latest kubectl version
+     shell: curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt
+     register: kubectl_version
+     changed_when: false
+
+   - name: Download kubectl binary
+     get_url:
+        url: "https://storage.googleapis.com/kubernetes-release/release/{{ kubectl_version.stdout }}/bin/linux/amd64/kubectl"
+        dest: /usr/local/bin/kubectl
+        mode: '0755'

@@ -1,0 +1,64 @@
+pipeline{
+    agent any
+    environment{
+        GIT_URL= 'https://github.com/giulia-franco/K8S_Webapp_E_Monitoring_Automation-'
+        BRANCH= 'main'
+        DOCKER_PATH= './Docker-App'
+        IMAGE_NAME= 'my_image'
+        IMAGE_TAG= 'latest'
+        DOCKER_CREDENTIALS= 'DOCKER_CREDENTIALS'
+        DOCKER_REPOSITORY='giulia005/docker-app:'
+    }
+    stages{
+        stage('clean whorkspace'){
+            steps{
+                cleanWs()
+            }
+        }
+        stage('clone repository git'){
+            steps{
+                script{
+                    git url: "${GIT_URL}", branch: "${BRANCH}"
+                }
+            }
+        }
+        stage('build image'){
+            steps{
+                script{
+                    docker.build("${IMAGE_NAME}:${IMAGE_TAG}", "${DOCKER_PATH}")
+                }
+            }
+        }
+        stage('Login Docker Hub') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(credentialsId: "${DOCKER_CREDENTIALS}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                    }
+                }
+            }
+        }
+        stage('Push Docker Image'){
+            steps{
+                script{
+                    sh 'docker tag "${IMAGE_NAME}":"${IMAGE_TAG}" "${DOCKER_REPOSITORY}${IMAGE_TAG}"'
+                    sh 'docker push "${DOCKER_REPOSITORY}""${IMAGE_TAG}"'
+                }
+            }
+        }
+
+
+    }
+}
+
+pipeline{
+    agent any
+       stages {
+            stage('prova'){
+                steps {
+                    script {
+                        sh 'kubectl get node'
+                    }
+                }
+            } 
+        }
+    }

@@ -1,0 +1,45 @@
+---
+# Create .kube directory
+   - name: Crea cartella .kube nella home di jenkins
+     community.docker.docker_container_exec:
+      container: Jenkins_Agent_Container
+      command: mkdir -p /home/jenkins/.kube
+      user: jenkins
+
+# Modifica il kubeconfig per usare l'IP host Docker bridge invece di 127.0.0.1
+   - name: Sostituisci localhost nel kubeconfig con IP host Docker bridge
+     ansible.builtin.replace:
+      path: /root/.kube/config
+      regexp: 'server: https://127\.0\.0\.1:6443'
+      replace: 'server: https://172.17.0.1:6443'
+     become: true
+
+  # Leggi il kubeconfig
+   - name: Leggi il kubeconfig da /root/.kube/config
+     ansible.builtin.slurp:
+      src: /root/.kube/config
+     register: kubeconfig_encoded
+     become: true
+
+  #  - name: Decodifica e modifica kubeconfig per skip TLS verify
+  #    ansible.builtin.set_fact:
+  #    kubeconfig_modified: "{{ (kubeconfig_encoded.content | b64decode) | regex_replace('(^\\s*server:.*$)', '\\1\n    insecure-skip-tls-verify: true') }}"
+
+ 
+  # Scrivi kubeconfig sulla VM
+   - name: Scrivi kubeconfig temporaneo sulla VM
+     ansible.builtin.copy:
+      content: "{{ kubeconfig_encoded.content | b64decode }}"
+      dest: /tmp/kubeconfig
+
+  # Copia il kubeconfig nel container Jenkins
+   - name: Copia kubeconfig nel container Jenkins con docker cp
+     ansible.builtin.command:
+      cmd: docker cp /tmp/kubeconfig Jenkins_Agent_Container:/home/jenkins/.kube/config
+
+  # Imposta permessi per il kubeconfig
+   - name: Imposta permessi corretti per kubeconfig nel container
+     community.docker.docker_container_exec:
+      container: Jenkins_Agent_Container
+      command: chown jenkins:jenkins /home/jenkins/.kube/config
+      user: root

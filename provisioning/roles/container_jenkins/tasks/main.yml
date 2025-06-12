@@ -1,0 +1,77 @@
+---
+# Container Jenkins Master
+   - name: Creazione container Jenkins master con ip statico
+     become: yes
+     community.docker.docker_container:
+      name: Jenkins_Master_Container        # nome container
+      image: jenkins/jenkins:lts        # immagine
+      state: started        # controllo stato del container
+      user: root
+      restart_policy: always        # restart automatico
+      ports: 
+      - "8080:8080"        # porta di accesso jenkins 8000
+      - "50000:50000"        # porta per la comunicazione con il jenkins agent 5000
+      networks:
+      - name: Docker_network        # associazione alla docker netwhork
+        ipv4_address: "172.3.27.7"        # assegnazione ip statico
+      volumes:
+      - jenkins_data:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+      #- /opt/jenkins/kubeconfig:/kubeconfig:ro
+      privileged: true
+
+# Container Jenkins Agent
+   - name: Creazione container jenkins agent
+     become: yes
+     community.docker.docker_container:
+      name: Jenkins_Agent_Container        # nome container
+      image: jenkins/inbound-agent:latest     # immagine
+      state: started        # controllo stato del container
+      restart_policy: always        # restart automatico
+      networks:
+      - name: Docker_network        # associazione alla docker netwhork
+        ipv4_address: "172.3.27.8"        # assegnazione ip statico
+      env:
+        JENKINS_URL: "http://192.168.168.7:8080/"        # Jenkins Master Server URL
+        JENKINS_SECRET: "aca2402ef832a322d27cc8d4f1f95a92ad310ac2c603da3aa8118a0000b38951"        # Agent Secret
+        JENKINS_AGENT_NAME: "Agent"        # nome agent per registrarlo sul jenkins master
+        JENKINS_AGENT_WORKDIR: /home/jenkins
+      privileged: true
+      volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker
+      # - /opt/jenkins/kubeconfig:/home/jenkins/
+
+# Jenkins group permissions to interact with dockr sock   
+   - name: Jenkins group permissions to interact with dockr sock
+     community.docker.docker_container_exec:
+      container: Jenkins_Agent_Container
+      command: chown root:jenkins /var/run/docker.sock
+      user: root
+      tty: true
+
+# Install kubectl inside jenkins agent container
+   - name: Install kubectl inside Jenkins agent container
+     community.docker.docker_container_exec:
+      container: Jenkins_Agent_Container
+      command: >
+       sh -c '
+        curl -LO "https://storage.googleapis.com/kubernetes-release/release/$(curl -s -L https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl" &&
+        chmod +x kubectl &&
+        mv kubectl /usr/local/bin/kubectl
+       '
+      user: root
+      tty: true
+
+# Install Helm inside Jenkins Agent container
+   - name: install Helm in Jenkins Agent 
+     community.docker.docker_container_exec:
+      container: Jenkins_Agent_Container
+      command: |
+        sh -c '
+        curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 &&
+        chmod 700 get_helm.sh &&
+        ./get_helm.sh
+        '
+      user: root
+      tty: true

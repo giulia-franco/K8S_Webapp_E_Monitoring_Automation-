@@ -1,0 +1,234 @@
+- hosts: all
+  become: true    
+  tasks:
+# provision vm
+# Package list update
+   - name: Package list update
+     package:
+        update_cache: yes 
+
+# Check that pip is installed
+   - name: Check that pip is installed
+     package:  
+        name: python3-pip     
+        state: present        
+
+# Install Python 'requests'
+   - name: Install Python 'requests'
+     pip:
+        name: requests        
+
+
+
+
+#docker 
+# Add repo Docker
+   - name: Add repo Docker
+     get_url:       
+        url: https://download.docker.com/linux/centos/docker-ce.repo            
+        dest: /etc/yum.repos.d/docker-ce.repo        
+     when: ansible_os_family == "RedHat"        
+
+# Download Docker 
+   - name: Download Docker
+     dnf:
+        name:
+          - docker-ce        
+          - docker-ce-cli        
+          - containerd.io        
+        state: present        
+     when: ansible_os_family == "RedHat"        
+
+# Start Docker
+   - name: Start Docker
+     systemd:
+        name: docker        
+        enabled: yes        
+        state: started 
+# Docker network creation
+   - name: Docker network creation
+     docker_network:
+      name: Docker_network        
+      driver: bridge         
+      ipam_config:
+      - subnet: 172.3.27.0/24  
+
+
+
+#kind
+# Download kind (K8s)
+   - name: Install kind
+     ansible.builtin.shell: |
+       curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+       chmod +x ./kind
+       mv ./kind /usr/local/bin/kind
+     args:
+      creates: /usr/local/bin/kind
+
+# Create file config whit static ip
+   - name: Crea file di configurazione Kind con IP statico
+     ansible.builtin.copy:
+      dest: /tmp/kind-config.yaml
+      content: |
+        kind: Cluster
+        apiVersion: kind.x-k8s.io/v1alpha4
+
+        networking:
+          podSubnet: "10.244.0.0/16"
+          serviceSubnet: "10.96.0.0/12"
+
+        nodes:
+          - role: control-plane
+            image: kindest/node:v1.29.0
+            extraPortMappings:
+              - containerPort: 80
+                hostPort: 80
+                protocol: TCP
+              - containerPort: 443
+                hostPort: 443
+                protocol: TCP
+            extraMounts:
+              - hostPath: /var/run/docker.sock
+                containerPath: /var/run/docker.sock
+
+          - role: worker
+            image: kindest/node:v1.29.0
+
+          - role: worker
+            image: kindest/node:v1.29.0
+
+
+# Check cluster monitoring-webapp-cluster
+   - name: Check if Kind cluster already exists
+     ansible.builtin.command:
+      cmd: kind get clusters
+     register: kind_clusters
+     become: true
+     environment:
+      PATH: "/usr/local/bin:/usr/bin:/bin"
+
+# Create cluster monitoring-webapp-cluster
+   - name: Create Kind cluster if not exists
+     ansible.builtin.command:
+      cmd: kind create cluster --name monitoring-webapp-cluster
+     when: "'monitoring-webapp-cluster' not in kind_clusters.stdout"
+     environment:
+        PATH: "/usr/local/bin:/usr/bin:/bin"
+
+# Container Jenkins Master
+   - name: Creazione container Jenkins master con ip statico
+     become: yes
+     community.docker.docker_container:
+      name: Jenkins_Master_Container        # nome container
+      image: jenkins/jenkins:lts        # immagine
+      state: started        # controllo stato del container
+      user: root
+      restart_policy: always        # restart automatico
+      ports: 
+      - "8080:8080"        # porta di accesso jenkins 8000
+      - "50000:50000"        # porta per la comunicazione con il jenkins agent 5000
+      networks:
+      - name: Docker_network        # associazione alla docker netwhork
+        ipv4_address: "172.3.27.7"        # assegnazione ip statico
+      volumes:
+      - jenkins_data:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+      #- /opt/jenkins/kubeconfig:/kubeconfig:ro
+      privileged: true
+
+# Container Jenkins Agent
+   - name: Creazione container jenkins agent
+     become: yes
+     community.docker.docker_container:
+      name: Jenkins_Agent_Container        # nome container
+      image: jenkins/inbound-agent:latest     # immagine
+      state: started        # controllo stato del container
+      restart_policy: always        # restart automatico
+      networks:
+      - name: Docker_network        # associazione alla docker netwhork
+        ipv4_address: "172.3.27.8"        # assegnazione ip statico
+      env:
+        JENKINS_URL: "http://192.168.168.7:8080/"        # Jenkins Master Server URL
+        JENKINS_SECRET: "aca2402ef832a322d27cc8d4f1f95a92ad310ac2c603da3aa8118a0000b38951"        # Agent Secret
+        JENKINS_AGENT_NAME: "Agent"        # nome agent per registrarlo sul jenkins master
+        JENKINS_AGENT_WORKDIR: /home/jenkins
+      privileged: true
+      volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker
+      # - /opt/jenkins/kubeconfig:/home/jenkins/
+
+# Jenkins group permissions to interact with dockr sock   
+   - name: Jenkins group permissions to interact with dockr sock
+     community.docker.docker_container_exec:
+      container: Jenkins_Agent_Container
+      command: chown root:jenkins /var/run/docker.sock
+      user: root
+      tty: true
+
+# Install kubectl inside jenkins agent container
+   - name: Install kubectl inside Jenkins agent container
+     community.docker.docker_container_exec:
+      container: Jenkins_Agent_Container
+      command: >
+       sh -c '
+        curl -LO "https://storage.googleapis.com/kubernetes-release/release/$(curl -s -L https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl" &&
+        chmod +x kubectl &&
+        mv kubectl /usr/local/bin/kubectl
+       '
+      user: root
+      tty: true
+
+# Install Helm inside Jenkins Agent container
+   - name: install Helm in Jenkins Agent 
+     community.docker.docker_container_exec:
+      container: Jenkins_Agent_Container
+      command: |
+        sh -c '
+        curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 &&
+        chmod 700 get_helm.sh &&
+        ./get_helm.sh
+        '
+      user: root
+      tty: true
+
+# creazione cartella .kube
+   - name: Crea cartella .kube nella home di jenkins
+     community.docker.docker_container_exec:
+      container: Jenkins_Agent_Container
+      command: mkdir -p /home/jenkins/.kube
+      user: jenkins
+
+# # modifica kubeconfig per usare IP statico VM
+#    - name: Sostituisci localhost nel kubeconfig con IP statico della VM
+#      become: true
+#      ansible.builtin.replace:
+#       path: /root/.kube/config
+#       regexp: 'server: https://127\.0\.0\.1:[0-9]+'
+#       replace: 'server: https://192.168.168.7:6443'
+
+# leggi il kubeconfig da /root/.kube/config
+   - name: Leggi il kubeconfig da /root/.kube/config
+     ansible.builtin.slurp:
+      src: /root/.kube/config
+     register: kubeconfig_encoded
+     become: true
+
+# copia il kubeconfig nel container Jenkins nella home di jenkins
+   - name: Scrivi kubeconfig temporaneo sulla VM
+     ansible.builtin.copy:
+      content: "{{ kubeconfig_encoded.content | b64decode }}"
+      dest: /tmp/kubeconfig
+     become: true
+
+# copia il file temporaneo nel container Jenkins con docker cp
+   - name: Copia kubeconfig nel container Jenkins con docker cp
+     ansible.builtin.command:
+      cmd: docker cp /tmp/kubeconfig Jenkins_Agent_Container:/home/jenkins/.kube/config
+
+# imposta permessi corretti dentro il container
+   - name: Imposta permessi corretti per kubeconfig nel container
+     community.docker.docker_container_exec:
+      container: Jenkins_Agent_Container
+      command: chown jenkins:jenkins /home/jenkins/.kube/config
+      user: root

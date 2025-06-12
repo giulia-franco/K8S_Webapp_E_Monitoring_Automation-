@@ -1,0 +1,32 @@
+---
+# Add repo Docker
+   - name: Add repo Docker
+     get_url:       
+        url: https://download.docker.com/linux/centos/docker-ce.repo            
+        dest: /etc/yum.repos.d/docker-ce.repo        
+     when: ansible_os_family == "RedHat"        
+
+# Download Docker 
+   - name: Download Docker
+     dnf:
+        name:
+          - docker-ce        
+          - docker-ce-cli        
+          - containerd.io        
+        state: present        
+     when: ansible_os_family == "RedHat"        
+
+# Start Docker
+   - name: Start Docker
+     systemd:
+        name: docker        
+        enabled: yes        
+        state: started 
+        
+# Docker network creation
+   - name: Docker network creation
+     docker_network:
+      name: Docker_network        
+      driver: bridge         
+      ipam_config:
+      - subnet: 172.3.27.0/24  
